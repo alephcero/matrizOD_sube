@@ -1,0 +1,11 @@
+geopandas >= 0.7.0
+folium
+jupyter	
+pyyaml
+matplotlib
+osmnx
+rtree
+h3
+mapclassify
+psycopg2
+sqlalchemy
