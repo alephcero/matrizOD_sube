@@ -1,6 +1,6 @@
 # data
 data/original/*
-
+data/no_subir/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
