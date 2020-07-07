@@ -14,6 +14,15 @@ pip install -r requirements.txt
 ```
 
 # Crear una base de datos
-Este proceso trabaja con un esquema de base de datos PostgreSQL
+Este proceso trabaja con un esquema de base de datos PostgreSQL. Asumimos que fue creada una db con las siguientes caracteristicas
 
+```
+
+DB_USERNAME = 'sube_user'
+DB_PASSWORD = 'sube_pass'
+DB_HOST = 'localhost'
+DB_PORT = '5432'
+DB_NAME = 'sube'
+DB_SCHEMA = 'public'
+```
 
