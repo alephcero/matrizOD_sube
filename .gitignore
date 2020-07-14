@@ -1,6 +1,7 @@
 # data
 data/original/*
 data/no_subir/*
+data/*.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
