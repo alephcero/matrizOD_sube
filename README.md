@@ -17,6 +17,7 @@ pip install -r requirements.txt
 Este proceso trabaja con un esquema de base de datos PostgreSQL. Asumimos que fue creada una db con las siguientes caracteristicas
 
 ```
+
 DB_USERNAME = 'sube_user'
 DB_PASSWORD = 'sube_pass'
 DB_HOST = 'localhost'
