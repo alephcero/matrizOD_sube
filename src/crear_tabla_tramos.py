@@ -57,6 +57,10 @@ print('leyendo jsons de qri')
 df = pd.concat([leer_jsons(numero, columnas) for numero in range(1, 4)])
 #df = leer_jsons(3, columnas)
 
+# en realidad las trx son ramales para FFCC y SUBTE
+df = df.rename(columns={'id_linea': 'id_ramal'})
+df.head()
+
 tarjetas = len(df.id_tarjeta.unique())
 print('La base tiene %i transacciones y %i tarjetas' % (len(df), tarjetas))
 
@@ -94,7 +98,7 @@ df = df.loc[~df.id_tarjeta.isin(tarjetas_lat_null), :]
 
 # eliminar casos con coordenadas muy desfazadas
 tarjetas_mal_latlon = df.loc[(df.lat < -36) | (df.lat > -33) |
-                            (df.lon < -61) | (df.lon > -57), 'id_tarjeta'].unique()
+                             (df.lon < -61) | (df.lon > -57), 'id_tarjeta'].unique()
 
 
 print('Borrar los datos de %i tarjetas fuera del bbox: %s registros' % (
@@ -208,7 +212,7 @@ CREATE TABLE tramos (
     id_tramo int,
     id_viaje int,
     modo text,
-    id_linea int,
+    id_ramal int,
     interno_bus int,
     o_lat numeric,
     o_lon numeric,
