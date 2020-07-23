@@ -8,6 +8,8 @@ from h3 import h3
 import psycopg2
 from sqlalchemy import create_engine
 import geopandas as gpd
+from shapely.geometry import Polygon, Point
+import re
 
 
 def h3_from_row(row, res, x, y):
@@ -29,6 +31,22 @@ def h3_indexing(df, res, lat='lat', lon='lon'):
     df['h3_res_' + str(res)] = df.apply(h3_from_row,
                                         axis=1, args=[res, lon, lat])
     return df
+
+
+def vertices_cada_Xmetros(geom, metros):
+    n_puntos = int((geom.length / metros) + 1)
+    percentiles = np.linspace(0, geom.length, n_puntos)
+    return [geom.interpolate(percentil, normalized=False) for percentil in percentiles]
+
+
+def convertir_recorridos_buses_paradas(fila, metros=400):
+    paradas = vertices_cada_Xmetros(fila.geometry, metros=metros)
+    paradas = gpd.GeoSeries(paradas).map(lambda g: Point(g.coords[0][0:2]))
+    crs = 'EPSG:3857'
+    gdf = gpd.GeoDataFrame(
+        np.repeat(fila.id_linea, len(paradas)), crs=crs, geometry=paradas)
+    gdf.columns = ['id_linea', 'geometry']
+    return gdf
 
 
 def limpiar_nombre_parada(s):
@@ -65,7 +83,7 @@ conn = psycopg2.connect(user=DB_USERNAME,
 engine = create_engine('postgresql://{}:{}@{}:{}/{}'
                        .format(DB_USERNAME, DB_PASSWORD, DB_HOST,
                                DB_PORT, DB_NAME))
-
+print('crear tabla paradas')
 
 query = """
 create sequence id_parada_seq start 1;
@@ -106,10 +124,11 @@ ramales.columns = ['id_ramal', 'nombre', 'jurisdiccion', 'modo']
 
 ramales['id_linea'] = ramales['id_ramal'].copy()
 
+print('Procesando subte')
 
 # asignar a todo el subte la misma linea
-ramales.loc[lineas.modo == 'SUB',
-            'id_linea'] = lineas.loc[lineas.modo == 'SUB', 'id_linea'].min()
+ramales.loc[ramales.modo == 'SUB',
+            'id_linea'] = ramales.loc[ramales.modo == 'SUB', 'id_linea'].min()
 
 
 # SUBTE Y PREMETRO
@@ -140,6 +159,8 @@ subte = h3_indexing(subte, res=10)
 subte['nombre_parada'] = subte['nombre_parada'].map(limpiar_nombre_parada)
 subte
 
+print('Subiendo subte')
+
 subte.to_sql('paradas', engine, if_exists='append', schema=DB_SCHEMA,
              method='multi', index=False)
 
@@ -162,12 +183,15 @@ premetro = h3_indexing(premetro, res=10)
 premetro['nombre_parada'] = premetro['nombre_parada'].map(
     limpiar_nombre_parada)
 
+print('Subiendo premetro')
+
 premetro.to_sql('paradas', engine, if_exists='append', schema=DB_SCHEMA,
                 method='multi', index=False)
 
+print('Procesando FFCC')
 
 # FFCC
-# asignr por linea, no ramal
+# crear una cartografia de estacions en base a IGN y ministerio
 ign = gpd.read_file('carto/insumos/ffcc/lineas ig no en mintrans.geojson')
 ign = ign.reindex(columns=['nam', 'geometry'])
 ign.columns = ['nombre_parada', 'geometry']
@@ -183,8 +207,10 @@ mintrans = gpd.read_file('carto/insumos/ffcc/rmba-ferrocarril-estaciones/')
 mintrans = mintrans.reindex(columns=['Línea', 'ETIQUETA', 'geometry'])
 mintrans.columns = ['nombre_linea', 'nombre_parada', 'geometry']
 
+
 ffcc = pd.concat([mintrans, ign])
 
+# asignar lineas a estaciones
 lineas = gpd.read_file('carto/insumos/ffcc/rmba-ferrocarril-lineas')
 lineas = lineas.reindex(columns=['Linea', 'Descrip', 'geometry'])
 lineas.columns = ['linea', 'ramal', 'geometry']
@@ -192,10 +218,11 @@ lineas['ramal'] = lineas['linea'] + ' - ' + lineas['ramal']
 lineas.geometry = lineas.geometry.to_crs(
     'EPSG:3857').buffer(500).to_crs('EPSG:4326')
 
-
 ffcc = gpd.sjoin(ffcc, lineas, how='left')
 ffcc.loc[ffcc.nombre_ramal.isnull(
 ), 'nombre_ramal'] = ffcc.loc[ffcc.nombre_ramal.isnull(), 'ramal']
+
+# formatear para la db
 ffcc = ffcc.reindex(
     columns=['nombre_linea', 'nombre_parada', 'geometry', 'nombre_ramal'])
 ffcc['modo'] = 'TRE'
@@ -208,17 +235,19 @@ ffcc['nombre_parada'] = ffcc['nombre_parada'].map(limpiar_nombre_parada)
 ffcc['nombre_ramal'] = ffcc['nombre_ramal'].map(limpiar_nombre_parada)
 
 # crear tabla lineas
-
 tabla_lineas = pd.DataFrame(ffcc.nombre_linea.unique())
 tabla_lineas['id_linea'] = range(ramales.id_ramal.max(
 ) + 1, ramales.id_ramal.max() + 1 + len(tabla_lineas))
 tabla_lineas.columns = ['nombre_linea', 'id_linea']
 tabla_lineas = tabla_lineas.append(pd.DataFrame({'id_linea': id_linea_subte,
-                                                 'nombre_linea': 'Subte'}, index=[tabla_lineas.index.max() + 1]))
+                                                 'nombre_linea': 'Subte'},
+                                                index=[tabla_lineas.index.max() + 1]))
 
 
 ffcc = ffcc.merge(tabla_lineas)
 ffcc['id_ramal'] = None
+
+print('Subiendo FFCC')
 
 ffcc.to_sql('paradas', engine, if_exists='append', schema=DB_SCHEMA,
             method='multi', index=False)
@@ -249,7 +278,129 @@ ramales_a_lineas_ffcc = {
 ramales.loc[ramales.modo == 'TRE', 'id_linea'] =\
     ramales.loc[ramales.modo == 'TRE', 'nombre'].replace(ramales_a_lineas_ffcc)
 
+print('Procesando Buses Nacionales')
 
+# BUSES
+# NACIONALES
+filtro_buses_nac = (ramales.modo == 'COL') & (
+    ramales.jurisdiccion == 'NACIONAL')
+
+ramales_bus_nac = ramales.loc[filtro_buses_nac].copy()
+
+ramales_bus_nac.nombre = ramales_bus_nac.nombre.map(
+    lambda s: s.replace('_AMBA', ''))
+ramales_bus_nac.nombre = ramales_bus_nac.nombre.map(lambda s: s.split('_')[-1])
+ramales_bus_nac.nombre = ramales_bus_nac.nombre.map(lambda s: s.split(' ')[-1])
+ramales_bus_nac.nombre = 'Linea ' + ramales_bus_nac.nombre.map(int).map(str)
+
+ramales_bus_nac = ramales_bus_nac.drop('jurisdiccion', axis=1)
+ramales_bus_nac = ramales_bus_nac.rename(columns={'nombre': 'nombre_linea'})
+ramales_bus_nac
+# nacionales
+bus_nac = gpd.read_file('carto/insumos/lineas-nacionales/')
+bus_nac.rename(columns={'LINEA': 'nombre_linea'}, inplace=True)
+bus_nac = bus_nac.reindex(columns=['nombre_linea', 'geometry'])
+bus_nac['nombre_linea'] = 'Linea ' + bus_nac['nombre_linea']
+bus_nac = bus_nac.to_crs('EPSG:3857')
+
+bus_nac = bus_nac.merge(ramales_bus_nac)
+
+bus_nac.head()
+
+
+paradas_bus_nac = pd.concat(
+    [convertir_recorridos_buses_paradas(fila) for i, fila in bus_nac.iterrows()])
+paradas_bus_nac.crs = 'EPSG:3857'
+paradas_bus_nac = paradas_bus_nac.to_crs('EPSG:4326')
+
+paradas_bus_nac = paradas_bus_nac.merge(bus_nac.drop('geometry', axis=1))
+paradas_bus_nac['nombre_ramal'] = None
+paradas_bus_nac['nombre_parada'] = None
+paradas_bus_nac['lat'] = paradas_bus_nac.geometry.y
+paradas_bus_nac['lon'] = paradas_bus_nac.geometry.x
+paradas_bus_nac = paradas_bus_nac.drop('geometry', axis=1)
+paradas_bus_nac = h3_indexing(paradas_bus_nac, res=10)
+paradas_bus_nac.head()
+
+print('Subiendo Buses Nacionales')
+
+for linea in paradas_bus_nac['nombre_linea'].unique():
+    subir = paradas_bus_nac.loc[paradas_bus_nac.nombre_linea == linea, :]
+    subir.to_sql('paradas', engine, if_exists='append', schema=DB_SCHEMA,
+                 method='multi', index=False)
+
+# reemplazando los nombres en lineas nacionales
+ramales.loc[filtro_buses_nac, 'nombre'] = ramales.loc[filtro_buses_nac, 'nombre'].map(
+    lambda s: s.replace('_AMBA', ''))
+
+ramales.loc[filtro_buses_nac, 'nombre'] = ramales.loc[filtro_buses_nac,
+                                                      'nombre'].map(lambda s: s.split('_')[-1])
+ramales.loc[filtro_buses_nac, 'nombre'] = ramales.loc[filtro_buses_nac,
+                                                      'nombre'].map(lambda s: s.split(' ')[-1])
+ramales.loc[filtro_buses_nac, 'nombre'] = 'Linea ' + \
+    ramales.loc[filtro_buses_nac, 'nombre'] .map(int).map(str)
+
+
+# PROVINCIALES
+filtro_buses_prov = (ramales.modo == 'COL') & (
+    ramales.jurisdiccion == 'PROVINCIAL')
+
+ramales_bus_prov = ramales.loc[filtro_buses_prov].copy()
+
+ramales_bus_prov = ramales_bus_prov.drop('jurisdiccion', axis=1)
+ramales_bus_prov = ramales_bus_prov.rename(columns={'nombre': 'nombre_linea'})
+
+ramales_bus_prov.nombre_linea = ramales_bus_prov.nombre_linea.map(
+    lambda s: int(re.findall(r"\d{3}", s)[0]))
+
+ramales_bus_prov.head()
+
+carto_bus_prov = gpd.read_file('carto/insumos/lineas-provinciales/')
+
+# ramales_bus_prov.nombre_linea.isin(carto_bus_prov.LINEA.unique()).sum()/len(ramales_bus_prov)
+# ramales_bus_prov[~ramales_bus_prov.nombre_linea.isin(carto_bus_prov.LINEA.unique())]['nombre_linea'].unique()
+
+carto_bus_prov.rename(columns={'LINEA': 'nombre_linea'}, inplace=True)
+carto_bus_prov = carto_bus_prov.reindex(columns=['nombre_linea', 'geometry'])
+carto_bus_prov = carto_bus_prov.to_crs('EPSG:3857')
+carto_bus_prov = carto_bus_prov.merge(ramales_bus_prov)
+carto_bus_prov['nombre_linea'] = 'Linea ' + \
+    carto_bus_prov['nombre_linea'].map(str)
+
+carto_bus_prov.head()
+
+
+paradas_bus_prov = pd.concat(
+    [convertir_recorridos_buses_paradas(fila) for i, fila in carto_bus_prov.iterrows()])
+paradas_bus_prov.head()
+
+paradas_bus_prov.crs = 'EPSG:3857'
+paradas_bus_prov = paradas_bus_prov.to_crs('EPSG:4326')
+
+paradas_bus_prov = paradas_bus_prov.merge(
+    carto_bus_prov.drop('geometry', axis=1))
+paradas_bus_prov['nombre_ramal'] = None
+paradas_bus_prov['nombre_parada'] = None
+paradas_bus_prov['lat'] = paradas_bus_prov.geometry.y
+paradas_bus_prov['lon'] = paradas_bus_prov.geometry.x
+paradas_bus_prov = paradas_bus_prov.drop('geometry', axis=1)
+paradas_bus_prov = h3_indexing(paradas_bus_prov, res=10)
+paradas_bus_prov.head()
+
+
+print('Subiendo Buses Provinciales')
+
+for linea in paradas_bus_prov['nombre_linea'].unique():
+    subir = paradas_bus_prov.loc[paradas_bus_prov.nombre_linea == linea, :]
+    subir.to_sql('paradas', engine, if_exists='append', schema=DB_SCHEMA,
+                 method='multi', index=False)
+
+
+ramales.loc[filtro_buses_prov, 'nombre'] = ramales.loc[filtro_buses_prov, 'nombre'].map(
+    lambda s: int(re.findall(r"\d{3}", s)[0]))
+
+
+# subir a bd
 ramales.to_sql('ramales', engine, schema=DB_SCHEMA,
                method='multi', index=False)
 
