@@ -431,7 +431,6 @@ carto_bus_muni['nombre_linea'] = 'Linea ' + \
 paradas_bus_muni = pd.concat(
     [convertir_recorridos_buses_paradas(fila) for i, fila in carto_bus_muni.iterrows()])
 
-paradas_bus_muni.shape
 
 paradas_bus_muni.crs = 'EPSG:3857'
 paradas_bus_muni = paradas_bus_muni.to_crs('EPSG:4326')
@@ -440,9 +439,11 @@ paradas_bus_muni = paradas_bus_muni.merge(
     carto_bus_muni.drop('geometry', axis=1))
 paradas_bus_muni['nombre_ramal'] = None
 paradas_bus_muni['nombre_parada'] = None
+
 paradas_bus_muni['lat'] = paradas_bus_muni.geometry.y
 paradas_bus_muni['lon'] = paradas_bus_muni.geometry.x
 paradas_bus_muni = paradas_bus_muni.drop('geometry', axis=1)
+
 paradas_bus_muni = h3_indexing(paradas_bus_muni, res=10)
 
 print('Subiendo Buses Municipales')
@@ -453,8 +454,8 @@ for linea in paradas_bus_muni['nombre_linea'].unique():
                  method='multi', index=False)
 
 # modificando nombres en tabla de ramales
-ramales.loc[filtro_buses_muni, 'nombre'] = ramales.loc[filtro_buses_muni, 'nombre'].map(
-    lambda s: int(re.findall(r"\d{3}", s)[0]))
+ramales.loc[filtro_buses_muni, 'nombre'] = ramales.loc[filtro_buses_muni,
+                                                       'nombre'].map(sacar_3_numeros_linea)
 
 
 # subir a bd
