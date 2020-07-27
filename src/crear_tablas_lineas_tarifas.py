@@ -12,6 +12,13 @@ from shapely.geometry import Polygon, Point
 import re
 
 
+def sacar_3_numeros_linea(s):
+    try:
+        return int(re.findall(r"\d{3}", s)[0])
+    except:
+        return np.nan
+
+
 def h3_from_row(row, res, x, y):
     '''
     Esta funcion toma una fila, un nivel de resolucion de h3
@@ -353,7 +360,6 @@ ramales_bus_prov = ramales_bus_prov.rename(columns={'nombre': 'nombre_linea'})
 ramales_bus_prov.nombre_linea = ramales_bus_prov.nombre_linea.map(
     lambda s: int(re.findall(r"\d{3}", s)[0]))
 
-ramales_bus_prov.head()
 
 carto_bus_prov = gpd.read_file('carto/insumos/lineas-provinciales/')
 
@@ -367,12 +373,8 @@ carto_bus_prov = carto_bus_prov.merge(ramales_bus_prov)
 carto_bus_prov['nombre_linea'] = 'Linea ' + \
     carto_bus_prov['nombre_linea'].map(str)
 
-carto_bus_prov.head()
-
-
 paradas_bus_prov = pd.concat(
     [convertir_recorridos_buses_paradas(fila) for i, fila in carto_bus_prov.iterrows()])
-paradas_bus_prov.head()
 
 paradas_bus_prov.crs = 'EPSG:3857'
 paradas_bus_prov = paradas_bus_prov.to_crs('EPSG:4326')
@@ -385,7 +387,6 @@ paradas_bus_prov['lat'] = paradas_bus_prov.geometry.y
 paradas_bus_prov['lon'] = paradas_bus_prov.geometry.x
 paradas_bus_prov = paradas_bus_prov.drop('geometry', axis=1)
 paradas_bus_prov = h3_indexing(paradas_bus_prov, res=10)
-paradas_bus_prov.head()
 
 
 print('Subiendo Buses Provinciales')
@@ -395,8 +396,64 @@ for linea in paradas_bus_prov['nombre_linea'].unique():
     subir.to_sql('paradas', engine, if_exists='append', schema=DB_SCHEMA,
                  method='multi', index=False)
 
-
+# modificando nombres en tabla de ramales
 ramales.loc[filtro_buses_prov, 'nombre'] = ramales.loc[filtro_buses_prov, 'nombre'].map(
+    lambda s: int(re.findall(r"\d{3}", s)[0]))
+
+# MUNICIPALES
+filtro_buses_muni = (ramales.modo == 'COL') & (
+    ramales.jurisdiccion == 'MUNICIPAL')
+
+ramales_bus_muni = ramales.loc[filtro_buses_muni].copy()
+
+carto_bus_muni = gpd.read_file('carto/insumos/lineas-municipales/')
+carto_bus_muni.rename(columns={'LINEA': 'nombre_linea'}, inplace=True)
+
+ramales_bus_muni = ramales_bus_muni.drop('jurisdiccion', axis=1)
+ramales_bus_muni = ramales_bus_muni.rename(columns={'nombre': 'nombre_linea'})
+
+ramales_bus_muni.nombre_linea = ramales_bus_muni.nombre_linea.map(
+    sacar_3_numeros_linea)
+ramales_bus_muni = ramales_bus_muni.dropna(subset=['nombre_linea'])
+ramales_bus_muni.nombre_linea = ramales_bus_muni.nombre_linea.map(int)
+
+
+carto_bus_muni = carto_bus_muni.reindex(columns=['nombre_linea', 'geometry'])
+carto_bus_muni = carto_bus_muni.to_crs('EPSG:3857')
+carto_bus_muni.shape
+ramales_bus_muni.shape
+
+carto_bus_muni = carto_bus_muni.merge(ramales_bus_muni)
+
+carto_bus_muni['nombre_linea'] = 'Linea ' + \
+    carto_bus_muni['nombre_linea'].map(str)
+
+paradas_bus_muni = pd.concat(
+    [convertir_recorridos_buses_paradas(fila) for i, fila in carto_bus_muni.iterrows()])
+
+paradas_bus_muni.shape
+
+paradas_bus_muni.crs = 'EPSG:3857'
+paradas_bus_muni = paradas_bus_muni.to_crs('EPSG:4326')
+
+paradas_bus_muni = paradas_bus_muni.merge(
+    carto_bus_muni.drop('geometry', axis=1))
+paradas_bus_muni['nombre_ramal'] = None
+paradas_bus_muni['nombre_parada'] = None
+paradas_bus_muni['lat'] = paradas_bus_muni.geometry.y
+paradas_bus_muni['lon'] = paradas_bus_muni.geometry.x
+paradas_bus_muni = paradas_bus_muni.drop('geometry', axis=1)
+paradas_bus_muni = h3_indexing(paradas_bus_muni, res=10)
+
+print('Subiendo Buses Municipales')
+
+for linea in paradas_bus_muni['nombre_linea'].unique():
+    subir = paradas_bus_muni.loc[paradas_bus_muni.nombre_linea == linea, :]
+    subir.to_sql('paradas', engine, if_exists='append', schema=DB_SCHEMA,
+                 method='multi', index=False)
+
+# modificando nombres en tabla de ramales
+ramales.loc[filtro_buses_muni, 'nombre'] = ramales.loc[filtro_buses_muni, 'nombre'].map(
     lambda s: int(re.findall(r"\d{3}", s)[0]))
 
 
