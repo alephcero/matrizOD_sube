@@ -207,6 +207,7 @@ ign['nombre_ramal'] = 'Roca - Universitario'
 
 est_ramal_chas = ['Domselaar', 'Chascomús',
                   'Brandsen', 'Altamirano', 'Jeppener']
+
 ign.loc[ign.nombre_parada.isin(est_ramal_chas),
         'nombre_ramal'] = 'Roca - Chascomus'
 
@@ -229,6 +230,7 @@ ffcc = gpd.sjoin(ffcc, lineas, how='left')
 ffcc.loc[ffcc.nombre_ramal.isnull(
 ), 'nombre_ramal'] = ffcc.loc[ffcc.nombre_ramal.isnull(), 'ramal']
 
+
 # formatear para la db
 ffcc = ffcc.reindex(
     columns=['nombre_linea', 'nombre_parada', 'geometry', 'nombre_ramal'])
@@ -241,6 +243,8 @@ ffcc['nombre_parada'].fillna('', inplace=True)
 ffcc['nombre_parada'] = ffcc['nombre_parada'].map(limpiar_nombre_parada)
 ffcc['nombre_ramal'] = ffcc['nombre_ramal'].map(limpiar_nombre_parada)
 
+ffcc.head()
+
 # crear tabla lineas
 tabla_lineas = pd.DataFrame(ffcc.nombre_linea.unique())
 tabla_lineas['id_linea'] = range(ramales.id_ramal.max(
@@ -250,15 +254,42 @@ tabla_lineas = tabla_lineas.append(pd.DataFrame({'id_linea': id_linea_subte,
                                                  'nombre_linea': 'Subte'},
                                                 index=[tabla_lineas.index.max() + 1]))
 
-
 ffcc = ffcc.merge(tabla_lineas)
-ffcc['id_ramal'] = None
+
+ramal_nombre_a_id = {'Mitre - Retiro - Jose Leon Suarez': 49,
+                     'Mitre - Jose Leon Suarez - Escobar - Zarate': 175,
+                     'Mitre - Retiro - Mitre': 172,
+                     'Mitre - Tren de la Costa': 135,
+                     'Mitre - Retiro - Empalme Maldonado': 172,
+                     'Mitre - Retiro - Tigre': 160,
+                     'Mitre - Victoria - Capilla del Senor': 174,
+                     'Belgrano Norte - CC: Retiro Villa Rosa': 196,
+                     'San Martin - Retiro - Cabred': 284,
+                     'Sarmiento - Once - Moreno': 144,
+                     'Sarmiento - Merlo - Empalme Lobos': 132,
+                     'Sarmiento - Moreno - Mercedes': 133,
+                     'Sarmiento - Emp. Temperley - Marmol': 144,
+                     'Roca - Temperley - Haedo': 16,
+                     'Roca - Plaza Constitucion -La Plata': 16,
+                     'Roca - Temperley - Bosques - Villa Elisa': 16,
+                     'Roca - Temperley - Ezeiza - Canuelas': 281,
+                     'Roca - Bosques - Berazategui': 16,
+                     'Roca - Temperley - Alejandro Korn': 16,
+                     'Roca - Constitucion - Temperley': 16,
+                     'Roca - Chascomus': 282,
+                     'Roca - Universitario': 283,
+                     'Belgrano Sur - Linea G: Buenos Aires - Tapiales': 44,
+                     'Belgrano Sur - Linea M: Puente Alsina - Aldo Bonzi - Marinos del Crucero Gral. Belgrano': 44,
+                     'Urquiza - Federico Lacroze - Lemos': 149}
+
+ffcc['id_ramal'] = ffcc['nombre_ramal'].replace(ramal_nombre_a_id)
+
 
 print('Subiendo FFCC')
 
+
 ffcc.to_sql('paradas', engine, if_exists='append', schema=DB_SCHEMA,
             method='multi', index=False)
-
 
 ramales_a_lineas_ffcc = {
     'FFCC ROCA': 405,
