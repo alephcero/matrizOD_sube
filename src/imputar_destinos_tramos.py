@@ -3,6 +3,7 @@ import numpy as np
 from sqlalchemy import create_engine
 import psycopg2
 from h3 import h3
+from datetime import datetime
 
 
 def imputar_detino_por_tarjeta(tramos_tarjeta, paradas, tolerancia_hex=12):
@@ -68,8 +69,12 @@ def detino_h3_to_lon(h):
 
 
 # seteo el nivel de resolucion de h3 y la tolerancia en metros
+start = datetime.now()
 resolucion = 10
-tolerancia_metros = 1500
+tolerancia_metros = 2000
+cantidad_tarjetas = 100000
+
+
 distancia_entre_hex = h3.edge_length(resolution=resolucion, unit='m') * 2
 tolerancia_hex = np.ceil(tolerancia_metros / distancia_entre_hex)
 
@@ -79,7 +84,6 @@ DB_HOST = 'localhost'
 DB_PORT = '5432'
 DB_NAME = 'sube'
 DB_SCHEMA = 'public'
-
 
 # Conectar a la db
 conn = psycopg2.connect(user=DB_USERNAME,
@@ -91,29 +95,35 @@ engine = create_engine('postgresql://{}:{}@{}:{}/{}'
                        .format(DB_USERNAME, DB_PASSWORD, DB_HOST,
                                DB_PORT, DB_NAME))
 
+print('Bajando paradas')
 q = """
 select *
 from paradas p
 """
 paradas = pd.read_sql(q, conn)
-
+print(cantidad_tarjetas, datetime.now() - start)
+print('Bajando datos tramos')
 # traer tramos de 10 tarjetas que hayan usado la linea b
 query = """
 select *
 from tramos
-where id_tarjeta in (37030200,
-  37030272,
-  37030633,
-  37032074,
-  37032172,
-  37032419,
-  37032508,
-  37033376,
-  37034039,
-  37034278)
+where id_tarjeta in (
+	with tabla_destinos_nulos as (
+		select id_tarjeta,count(id_tarjeta) = sum(CASE when d_h3 = ''  THEN 1 else 0 end) as todos_destinos_null
+		from tramos d
+		group by id_tarjeta
+	)
+	select id_tarjeta
+	from tabla_destinos_nulos
+	where todos_destinos_null = true
+	limit %i
+)
 order by id_tarjeta,id_viaje,id_tramo;
-"""
+""" % cantidad_tarjetas
 tramos = pd.read_sql(query, conn)
+print(tramos.id_tarjeta.unique()[:5])
+
+print('Imputando destinos')
 
 destinos = tramos.groupby(['id_tarjeta']).apply(
     imputar_detino_por_tarjeta, paradas=paradas, tolerancia_hex=tolerancia_hex)
@@ -121,7 +131,8 @@ destinos = tramos.groupby(['id_tarjeta']).apply(
 destinos = destinos.reindex(
     columns=['id_tarjeta', 'id_viaje', 'id_tramo', 'd_h3', 'd_lat', 'd_lon'])
 
-destinos
+
+print('Subiendo destinos a la db')
 
 destinos.to_sql('destinos', engine, if_exists='append', schema=DB_SCHEMA,
                 chunksize=50000, index=False, method='multi')
@@ -143,3 +154,22 @@ cur = conn.cursor()
 cur.execute(update_query)
 cur.close()
 conn.commit()
+
+
+q = """
+with tabla_destinos_nulos as (
+	select id_tarjeta,count(id_tarjeta) = sum(CASE when d_h3 = ''  THEN 1 else 0 end) as todos_destinos_null
+	from tramos d
+	group by id_tarjeta
+)
+select count(*)
+from tabla_destinos_nulos
+where todos_destinos_null = true
+"""
+
+quedan = pd.read_sql(q, conn)
+quedan = quedan.iloc[0, 0]
+
+print('Quedan %s tarjetas' % quedan)
+print('Se procesaron %i tarjetas en %s ' %
+      (cantidad_tarjetas, datetime.now() - start))

@@ -110,6 +110,19 @@ viajes = viajes.rename(columns={
     'TRE': 'n_tramos_tre',
     'SUB': 'n_tramos_sub'
 })
+# eliminar el destino del viaje que que tiene dentro etapas con destinos
+# sin predecir
+viajes_con_tramo_sin_predecir = tramos.loc[tramos.d_h3.isnull(), [
+    'id_tarjeta', 'id_viaje']]
+viajes_con_tramo_sin_predecir = viajes_con_tramo_sin_predecir.drop_duplicates()
+viajes_con_tramo_sin_predecir.loc[:, 'keep'] = False
 
+viajes = viajes.merge(viajes_con_tramo_sin_predecir, on=[
+                      'id_tarjeta', 'id_viaje'], how='left')
+viajes.loc[:, 'keep'] = viajes.loc[:, 'keep'].fillna(True)
+# eliminar destino de los viajes cuya cadena entera no puede reconstruirse
+viajes.loc[~viajes.keep, 'd_h3'] = None
+viajes = viajes.drop('keep', axis=1)
+viajes.to_csv('viajesfinal.csv', index=False)
 viajes.to_sql('viajes', engine, if_exists='append', schema=DB_SCHEMA,
               chunksize=50000, index=False, method='multi')
